@@ -1,100 +1,58 @@
-# ---- build stage ----
+# Deplexo deployment for the official stackblitz-labs/bolt.diy source.
+# Public gateway: :5183. Private bolt.diy: 127.0.0.1:5173.
+# This intentionally replaces the upstream Dockerfile in your fork.
+
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
-
-# CI-friendly env
-ENV HUSKY=0
-ENV CI=true
-
-# Use pnpm
+ENV HUSKY=0 CI=true
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-# Ensure git is available for build and runtime scripts
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-  && rm -rf /var/lib/apt/lists/*
-
-# Accept (optional) build-time public URL for Remix/Vite (Coolify can pass it)
-ARG VITE_PUBLIC_APP_URL
-ENV VITE_PUBLIC_APP_URL=${VITE_PUBLIC_APP_URL}
-
-# Install deps efficiently
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm fetch
-
-# Copy source and build
 COPY . .
-# install with dev deps (needed to build)
 RUN pnpm install --offline --frozen-lockfile
-
-# Build the Remix app (SSR + client)
+# Upstream build needs a large Node heap. The builder must provide enough RAM for this step.
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
 
-# ---- production dependencies stage ----
-FROM build AS prod-deps
-
-# Keep only production deps for runtime
-RUN pnpm prune --prod --ignore-scripts
-
-
-# ---- production stage ----
-FROM prod-deps AS bolt-ai-production
+# Retain dev dependencies: runtime is vite preview, and pruning removes vite.
+FROM build AS runtime
 WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && update-ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
-ENV NODE_ENV=production
-ENV PORT=5173
-ENV HOST=0.0.0.0
+# The platform's app filesystem is read-only. Preserve build-generated state in the image,
+# then point known runtime-write locations at disposable /tmp paths.
+RUN set -eu; mkdir -p /opt/seed /app/node_modules; \
+    for p in .wrangler/state .wrangler/tmp .react-router/types .cloudflare/state .cloudflare/tmp; do \
+      mkdir -p "/app/$(dirname "$p")" "/opt/seed/$(dirname "$p")"; \
+      if [ -e "/app/$p" ]; then mv "/app/$p" "/opt/seed/$p"; fi; \
+      ln -s "/tmp/state/$p" "/app/$p"; \
+    done; \
+    rm -rf /app/node_modules/.vite /app/node_modules/.vite-temp /app/node_modules/.cache; \
+    ln -s /tmp/vite-cache /app/node_modules/.vite; \
+    ln -s /tmp/vite-temp /app/node_modules/.vite-temp; \
+    ln -s /tmp/node-cache /app/node_modules/.cache
 
-# Non-sensitive build arguments
-ARG VITE_LOG_LEVEL=debug
-ARG DEFAULT_NUM_CTX
+ENV NODE_ENV=production \
+    PORT=5183 \
+    INTERNAL_PORT=5173 \
+    RUNNING_IN_DOCKER=true \
+    VITE_LOG_LEVEL=info \
+    DEFAULT_NUM_CTX=32768 \
+    WRANGLER_SEND_METRICS=false \
+    HOME=/tmp/home \
+    XDG_CONFIG_HOME=/tmp/xdg-config \
+    XDG_DATA_HOME=/tmp/xdg-data \
+    XDG_CACHE_HOME=/tmp/xdg-cache \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs \
+    BOLT_NODE_HEAP_MB=384
 
-# Set non-sensitive environment variables
-ENV WRANGLER_SEND_METRICS=false \
-    VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
-    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX} \
-    RUNNING_IN_DOCKER=true
-
-# Note: API keys should be provided at runtime via docker run -e or docker-compose
-# Example: docker run -e OPENAI_API_KEY=your_key_here ...
-
-# Install curl for healthchecks
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-  && rm -rf /var/lib/apt/lists/*
-
-# Copy built files
-COPY --from=prod-deps /app/build /app/build
-COPY --from=prod-deps /app/node_modules /app/node_modules
-COPY --from=prod-deps /app/package.json /app/package.json
-COPY --from=prod-deps /app/wrangler.jsonc /app/wrangler.jsonc
-
-# Pre-configure wrangler to disable metrics
-RUN mkdir -p /root/.config/.wrangler && \
-    echo '{"enabled":false}' > /root/.config/.wrangler/metrics.json
-
-EXPOSE 5173
-
-# Healthcheck for deployment platforms
-HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
-  CMD curl -fsS http://localhost:5173/ || exit 1
-
-# Start using dockerstart script with Wrangler
-CMD ["pnpm", "run", "dockerstart"]
-
-
-# ---- development stage ----
-FROM build AS development
-
-# Non-sensitive development arguments
-ARG VITE_LOG_LEVEL=debug
-ARG DEFAULT_NUM_CTX
-
-# Set non-sensitive environment variables for development
-ENV VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
-    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX} \
-    RUNNING_IN_DOCKER=true
-
-# Note: API keys should be provided at runtime via docker run -e or docker-compose
-# Example: docker run -e OPENAI_API_KEY=your_key_here ...
-
-RUN mkdir -p /app/run
-CMD ["pnpm", "run", "dev", "--host"]
+USER node
+EXPOSE 5183
+CMD ["node", "/app/deplexo-gateway.mjs"]

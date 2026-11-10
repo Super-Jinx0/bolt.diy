@@ -1,0 +1,26 @@
+فایل‌های استقرار bolt.diy برای Deplexo
+=====================================
+این پوشه فقط فایل‌هایی است که باید به ریشهٔ fork موجودِ مخزن رسمی bolt.diy اضافه شوند. این پوشه را به‌عنوان یک پروژهٔ مستقل deploy نکن.
+
+روش نصب:
+۱) در ZIP وارد پوشه bolt-diy-deplexo شو.
+۲) همین پنج فایل را در ریشهٔ fork خودت در GitHub آپلود کن، کنار package.json و pnpm-lock.yaml.
+۳) فایل Dockerfile فعلی fork با Dockerfile داخل این بسته جایگزین می‌شود. این عمدی است: Deplexo لاگ «load build definition from Dockerfile» نشان داده بود. با جایگزینی نام پیش‌فرض، فایل صحیح انتخاب می‌شود و دستور dev قبلی در image نمی‌ماند.
+۴) commit و push کن.
+۵) در Deplexo همان fork و همان branch را deploy کن. Build method باید Dockerfile باشد. Start Command سفارشی را پاک کن؛ deplexo.yaml آن را خالی می‌کند تا CMD داخل Dockerfile اجرا شود.
+۶) متغیرها در Deplexo Environment:
+   BOLT_AUTH_USERNAME=admin
+   BOLT_AUTH_PASSWORD=رمز تصادفی شخصی با حداقل ۱۶ نویسه
+   رمز را جایگزین کن؛ آن را در GitHub ننویس.
+۷) پورت ۵۱۸۳ در deplexo.yaml تنظیم شده. اگر صفحهٔ تنظیمات Deplexo فیلد port را YAML-controlled نشان می‌دهد، آن را دستی تغییر نده.
+۸) بعد از deploy، لاگ باید `gateway listening on 0.0.0.0:5183` و بعد `bolt.diy is READY` نشان دهد. `/healthz` فقط gateway را می‌سنجد؛ `/readyz` آماده بودن bolt.diy را نشان می‌دهد.
+
+نکتهٔ حیاتی: این بسته فایل‌های تغییر لازم برای fork است، نه سورس کامل برنامه. package.json، pnpm-lock.yaml، app، public، workers، vite.config.ts، wrangler.jsonc و بقیهٔ فایل‌های اصلی باید در همان ریشه باقی بمانند.
+
+قبل از deploy:
+- مطمئن شو فایل‌های اصلی کنار Dockerfile هستند؛ COPY در build به package.json نیاز دارد.
+- پلن/سقف منابع Deplexo باید برای build سنگین Node کافی باشد؛ Dockerfile سقف heap build را ۴GB می‌گذارد، این به تنهایی به معنی حافظهٔ کافی builder نیست.
+- زمان اجرا /tmp در Deplexo محدود است؛ در صورت EROFS/ENOSPC لاگ را بررسی کن.
+- اگر در log `pnpm run dev` یا `--host --host` دیدی، Start Command یا build از commit/تنظیم اشتباه آمده. Deploy را ادامه نده؛ branch، commit، Dockerfile و Start Command را بررسی کن.
+
+اعتبارسنجی انجام‌شده: فایل‌های JS با node --check بررسی شدند؛ بستهٔ zip سالم است؛ پورت‌ها و مسیرهای build/runtime بررسی شدند؛ تست‌های ساختگی قبلی برای ورود، health check، crash/hang recovery پاس شدند. Build واقعی Docker و اجرای واقعی bolt.diy روی Deplexo در این محیط قابل اجرا نبود؛ بنابراین نمی‌شود قول داد هیچ خطایی رخ ندهد. اگر خطای تازه دیدی، اولین خطای Build Logs یا Runtime Logs را بفرست و رمز/توکن را حذف کن.
